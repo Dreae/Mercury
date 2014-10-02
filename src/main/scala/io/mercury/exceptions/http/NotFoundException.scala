@@ -1,3 +1,3 @@
 package io.mercury.exceptions.http
 
-class NotFoundException extends Exception
+class NotFoundException extends HttpException(404, "Not Found")

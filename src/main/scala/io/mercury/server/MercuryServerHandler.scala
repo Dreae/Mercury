@@ -1,8 +1,9 @@
 package io.mercury.server
 
 import com.typesafe.config.Config
+import io.mercury.exceptions.http.HttpException
 import io.mercury.response.StaticContentResponse
-import RequestHandler.StaticContent
+import io.mercury.server.RequestHandler.StaticContent
 import io.netty.channel.{ChannelFutureListener, ChannelHandlerContext, SimpleChannelInboundHandler}
 import io.netty.handler.codec.http._
 
@@ -39,9 +40,14 @@ class MercuryServerHandler(private val sites: Array[Config], private val conf: M
   }
 
   override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) = {
-    if(ctx.channel.isActive) {
-      cause.printStackTrace()
-      sendError(ctx, 500, "Internal Server Error")
+    cause match {
+      case HttpException(status, msg) =>
+        sendError(ctx, status, msg)
+      case _ =>
+        cause.printStackTrace()
+        if(ctx.channel.isActive) {
+          sendError(ctx, 500, "Internal Server Error")
+        }
     }
   }
 
@@ -49,12 +55,7 @@ class MercuryServerHandler(private val sites: Array[Config], private val conf: M
     val response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(code, status))
     response.content.writeBytes("An error has occurred".getBytes("utf-8"))
     response.headers.set("Content-Type", "text/plain; charset=UTF-8")
-    finalizeResponse(response)
     writeResponse(response, ctx)
-  }
-
-  private def finalizeResponse(response: FullHttpResponse) = {
-    response.headers.set("Server", conf("tokens"))
   }
 
   private def writeResponse(response: FullHttpResponse, ctx: ChannelHandlerContext) = {

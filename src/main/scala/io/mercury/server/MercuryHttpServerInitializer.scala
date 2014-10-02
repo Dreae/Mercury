@@ -4,7 +4,7 @@ import com.typesafe.config.{ConfigValue, Config, ConfigObject}
 import io.mercury.exceptions.ConfigParsingException
 import io.netty.channel.ChannelInitializer
 import io.netty.channel.socket.SocketChannel
-import io.netty.handler.codec.http.{HttpObjectAggregator, HttpServerCodec}
+import io.netty.handler.codec.http.{HttpRequestDecoder, HttpResponseEncoder, HttpObjectAggregator, HttpServerCodec}
 import io.netty.handler.stream.ChunkedWriteHandler
 import java.util.Map.Entry
 
@@ -39,7 +39,7 @@ class MercuryHttpServerInitializer(conf: Config) extends ChannelInitializer[Sock
 
   override def initChannel(ch: SocketChannel) = {
     val p = ch.pipeline()
-    p.addLast("decoder", new HttpServerCodec())
+    p.addLast("codec", new MercuryHttpCodec(handlerConf))
     p.addLast("aggregator", new HttpObjectAggregator(aggregateSize))
     p.addLast("writer", new ChunkedWriteHandler())
     p.addLast("handler", new MercuryServerHandler(sites, handlerConf))

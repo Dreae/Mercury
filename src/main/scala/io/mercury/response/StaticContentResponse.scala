@@ -1,6 +1,7 @@
 package io.mercury.response
 
 import java.io.{File, FileNotFoundException, RandomAccessFile}
+import java.net.URLDecoder
 
 import io.mercury.exceptions.http.{MethodNotAllowedException, NotFoundException}
 import io.netty.channel.ChannelHandlerContext
@@ -37,16 +38,14 @@ class StaticContentResponse(conf: Map[String, AnyRef], root: String) {
   }
 
   private def sanitizeUri(uri: String): String = {
-    val testFile = new File(root, uri)
-    val rootFile = new File(root)
-    var parent = testFile
-    while(parent != null) {
-      if(rootFile.equals(parent)) {
-        return uri
-      }
-      parent = parent.getParentFile
+    val url = URLDecoder.decode(uri, "utf-8")
+    val testFile = new File(root, url).getCanonicalPath
+    val rootFile = new File(root).getCanonicalPath
+    if(testFile.substring(0, rootFile.length) == rootFile){
+      url
+    } else {
+      null
     }
-    null
   }
 
   private def guessMimeType(file: String): String = {
