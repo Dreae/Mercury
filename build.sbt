@@ -15,3 +15,5 @@ libraryDependencies ++= Seq(
   "io.netty" % "netty-all" % "4.0.23.Final" withJavadoc() withSources(),
   "com.typesafe" % "config" % "1.2.1"
 )
+
+shellPrompt in ThisBuild := { state => "sbt:" + Project.extract(state).currentRef.project + "> " }

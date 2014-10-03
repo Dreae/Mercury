@@ -3,12 +3,13 @@ package io.mercury.response
 import java.io.{File, FileNotFoundException, RandomAccessFile}
 import java.net.URLDecoder
 
-import io.mercury.exceptions.http.{MethodNotAllowedException, NotFoundException}
+import io.mercury.config.MercuryConfig
+import io.mercury.exceptions.http.{ForbiddenException, MethodNotAllowedException, NotFoundException}
 import io.netty.channel.ChannelHandlerContext
 import io.netty.handler.codec.http._
 import io.netty.handler.stream.ChunkedFile
 
-class StaticContentResponse(conf: Map[String, AnyRef], root: String) {
+class StaticContentResponse(root: String) {
 
   def toResponse(request: FullHttpRequest, ctx: ChannelHandlerContext) = {
     if(request.getMethod.name != "GET")
@@ -19,11 +20,18 @@ class StaticContentResponse(conf: Map[String, AnyRef], root: String) {
     if(path == null)
       throw new NotFoundException
 
-    val file = new File(root, path)
+    var file = new File(root, path)
+    if(file.isDirectory) {
+      val index = new File(file.getCanonicalPath, "index.html")
+      if(!index.exists || index.isHidden || !index.isFile)
+        throw new ForbiddenException
+      else
+        file = index
+    }
     if(file.isHidden || !file.exists || !file.isFile)
       throw new NotFoundException
 
-    try{
+    try {
       val raf = new RandomAccessFile(file, "r")
       val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(200, "OK"))
       response.headers.set("Content-Length", file.length)
@@ -34,7 +42,6 @@ class StaticContentResponse(conf: Map[String, AnyRef], root: String) {
     } catch {
       case _: FileNotFoundException => throw new NotFoundException
     }
-
   }
 
   private def sanitizeUri(uri: String): String = {
@@ -50,7 +57,7 @@ class StaticContentResponse(conf: Map[String, AnyRef], root: String) {
 
   private def guessMimeType(file: String): String = {
     val ext = file.substring(file.lastIndexOf('.') + 1, file.length)
-    val types = conf("types").asInstanceOf[List[(List[String], String)]].filter(_._1.contains(ext))
-    if(types.nonEmpty) types(0)._2 else conf("default_type").asInstanceOf[String]
+    val types = MercuryConfig().mimeTypes.asInstanceOf[List[(List[String], String)]].filter(_._1.contains(ext))
+    if(types.nonEmpty) types(0)._2 else MercuryConfig().defaultType.asInstanceOf[String]
   }
 }

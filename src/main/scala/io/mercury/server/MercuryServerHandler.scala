@@ -1,13 +1,14 @@
 package io.mercury.server
 
 import com.typesafe.config.Config
+import io.mercury.config.MercuryConfig
 import io.mercury.exceptions.http.HttpException
 import io.mercury.response.StaticContentResponse
 import io.mercury.server.RequestHandler.StaticContent
 import io.netty.channel.{ChannelFutureListener, ChannelHandlerContext, SimpleChannelInboundHandler}
 import io.netty.handler.codec.http._
 
-class MercuryServerHandler(private val sites: Array[Config], private val conf: Map[String, AnyRef]) extends SimpleChannelInboundHandler[FullHttpRequest]{
+class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest]{
 
   override def channelReadComplete(ctx: ChannelHandlerContext) = {
     ctx.flush()
@@ -22,20 +23,12 @@ class MercuryServerHandler(private val sites: Array[Config], private val conf: M
     }
 
     val reqSite = req.headers.get("HOST").split(":")(0)
-    val site = {
-      val iSites = sites.filter(_.getString("name") == reqSite)
-      if(iSites.length == 0) {
-        sendError(ctx, 503, "Service Unavailable")
-        return
-      } else if(iSites.length > 1) {
-        //TODO: Log error
-      }
-      iSites(0)
-    }
+
+    val site = MercuryConfig().site(reqSite)
 
     RequestHandler.getRequestHandlerType(site) match {
       case StaticContent(root) =>
-        new StaticContentResponse(conf, root).toResponse(req, ctx)
+        new StaticContentResponse(root).toResponse(req, ctx)
     }
   }
 
