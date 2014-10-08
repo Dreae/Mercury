@@ -1,6 +1,5 @@
 package io.mercury.server
 
-import com.typesafe.config.Config
 import io.mercury.config.MercuryConfig
 import io.mercury.exceptions.http.HttpException
 import io.mercury.response.StaticContentResponse
@@ -26,9 +25,9 @@ class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest
 
     val site = MercuryConfig().site(reqSite)
 
-    RequestHandler.getRequestHandlerType(site) match {
+    RequestHandler.getRequestHandlerType(site, req) match {
       case StaticContent(root) =>
-        new StaticContentResponse(root).toResponse(req, ctx)
+        new StaticContentResponse(root, site).toResponse(req, ctx)
     }
   }
 

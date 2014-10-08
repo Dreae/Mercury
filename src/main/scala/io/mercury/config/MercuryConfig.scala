@@ -1,19 +1,27 @@
 package io.mercury.config
 
 import java.io.File
+import collection.JavaConverters._
 import java.util.Map.Entry
+import java.util.regex.Pattern
 
-import com.typesafe.config.{ConfigValue, ConfigObject, Config, ConfigFactory}
+import com.typesafe.config._
 import io.mercury.exceptions.ConfigParsingException
 import io.mercury.exceptions.http.NotFoundException
 
 class MercuryConfig(private val conf: Config) {
   val server = conf.getObject("server").toConfig.withFallback(ConfigFactory.load("server"))
-  private val site = ConfigFactory.load("site")
+  val defSite = ConfigFactory.load("site")
   val aggregateSize = this.parseAggregateSize(server.getString("max_file_upload"))
   val sites = server.getList("sites").toArray.map {
     case obj: ConfigObject =>
-      obj.toConfig.withFallback(site)
+      val siteConf = obj.toConfig.withFallback(defSite)
+      val locations = siteConf.getObject("locations").entrySet().toArray
+      val parsed = locations.toArray.map{
+        case entry: Entry[_,_] =>
+          parseLocRegex(entry.getKey.asInstanceOf[String], entry.getValue.asInstanceOf[ConfigValue])
+      }
+      siteConf.withValue("locations", ConfigValueFactory.fromMap(Map(parsed:_*).asJava))
     case _ =>
       throw new ConfigParsingException("Config is incorrectly formatted")
   }
@@ -27,7 +35,7 @@ class MercuryConfig(private val conf: Config) {
 
   val mimeTypes = conf.getObject("types").toConfig.entrySet.toArray.map {
     case obj: Entry[_, _] =>
-      (obj.getValue.asInstanceOf[ConfigValue].unwrapped.asInstanceOf[String].split(" ").toList, obj.getKey.toString.replace("\"", ""))
+      (obj.getValue.asInstanceOf[ConfigValue].unwrapped.asInstanceOf[String].split(" ").toList, obj.getKey.toString.replace("\"",""))
   }.toList
 
   val defaultType = server.getString("default_type")
@@ -43,6 +51,26 @@ class MercuryConfig(private val conf: Config) {
       //TODO: Log error
     }
     iSites(0)
+  }
+
+  private def parseLocRegex(location: String, locDef: ConfigValue): (String, AnyRef) = {
+    val locSplit = location.split(" ")
+    if(locSplit(1).contains("~")){
+      (
+        location,
+        configObject2Map(locDef.asInstanceOf[ConfigObject].withValue("__regex__", ConfigValueFactory.fromAnyRef(Pattern.compile(locSplit(2)))))
+      )
+    } else {
+      (location, configObject2Map(locDef.asInstanceOf[ConfigObject]))
+    }
+  }
+
+  private def configObject2Map(obj: ConfigObject) = {
+    val entrySet = obj.entrySet.toArray.map{
+      case entry: Entry[_,_] =>
+        (entry.getKey.asInstanceOf[String], entry.getValue.asInstanceOf[ConfigValue].unwrapped())
+    }
+    Map(entrySet:_*).asJava
   }
 
   implicit class IntToBytes(x: Int) {
