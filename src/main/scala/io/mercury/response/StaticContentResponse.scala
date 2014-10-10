@@ -2,48 +2,69 @@ package io.mercury.response
 
 import java.io.{File, FileNotFoundException, RandomAccessFile}
 import java.net.URLDecoder
+import java.text.SimpleDateFormat
+import java.util.{Locale, TimeZone, Calendar, Date, GregorianCalendar}
 
 import com.typesafe.config.Config
 import io.mercury.config.MercuryConfig
 import io.mercury.exceptions.http.{MethodNotAllowedException, NotFoundException}
-import io.netty.channel.{ChannelFutureListener, ChannelHandlerContext}
+import io.mercury.server.MercuryServerHandler.HTTP_DATE_FORMAT
+import io.netty.channel.ChannelHandlerContext
 import io.netty.handler.codec.http._
 import io.netty.handler.stream.ChunkedFile
 
-class StaticContentResponse(root: String, site: Config) {
+class StaticContentResponse(root: String, site: Config, req: FullHttpRequest) extends MercuryHttpResponder {
+  val format = new SimpleDateFormat(HTTP_DATE_FORMAT, Locale.US)
+  format.setTimeZone(TimeZone.getTimeZone("GMT"))
 
-  def toResponse(request: FullHttpRequest, ctx: ChannelHandlerContext) = {
-    if(request.getMethod.name != "GET")
-      throw new MethodNotAllowedException
+  override def complete: (ChannelHandlerContext => Any)  = {
+    if(req.getMethod.name != "GET")
+    throw new MethodNotAllowedException
 
-    val uri = request.getUri
+    val uri = req.getUri
     val path = sanitizeUri(uri)
     if(path == null)
-      throw new NotFoundException
+    throw new NotFoundException
 
     var file = new File(root, path)
     if(file.isDirectory) {
       val indices = site.getList("index").unwrapped().toArray.map{case index: String => new File(file.getCanonicalPath, index)}
       for(index <- indices) {
         if(index.exists && !index.isHidden && index.isFile)
-          file = index
+        file = index
       }
     }
     if(file.isHidden || !file.exists || !file.isFile || file.isDirectory)
-      throw new NotFoundException
+    throw new NotFoundException
 
-    try {
-      val raf = new RandomAccessFile(file, "r")
-      val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(200, "OK"))
-      response.headers.set("Content-Length", file.length)
-      response.headers.set("Content-Type", guessMimeType(file.getCanonicalPath))
-      ctx.write(response)
-      ctx.write(new HttpChunkedInput(new ChunkedFile(raf, 0, file.length, 2048)))
-      if(!HttpHeaders.isKeepAlive(request))
-        ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT).addListener(ChannelFutureListener.CLOSE)
-    } catch {
-      case _: FileNotFoundException => throw new NotFoundException
+    val ifModifiedSince = req.headers().get("If-Modified-Since")
+    if(ifModifiedSince != null && ifModifiedSince.nonEmpty && (format.parse(ifModifiedSince).getTime / 1000) == (file.lastModified() / 1000)) {
+      val response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(304, "Not Modified"))
+      (ctx) => ctx.write(response)
+    } else {
+      try {
+        val raf = new RandomAccessFile(file, "r")
+        val response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(200, "OK"))
+        response.headers.set("Content-Length", file.length)
+        response.headers.set("Content-Type", guessMimeType(file.getCanonicalPath))
+        setCacheHeaders(response, file)
+        (ctx) => {
+          ctx.write(response)
+          ctx.write(new HttpChunkedInput(new ChunkedFile(raf, 0, file.length, 2048)))
+        }
+      } catch {
+        case _: FileNotFoundException => throw new NotFoundException
+      }
     }
+  }
+
+  private def setCacheHeaders(resp: HttpResponse, file: File) = {
+    val time = new GregorianCalendar()
+    resp.headers().set("Date", format.format(time.getTime))
+    time.add(Calendar.SECOND, 3600)
+    resp.headers().set("Expires", format.format(time.getTime))
+    resp.headers().add("Cache-Control", "max-age=" + 3600)
+    resp.headers().add("Last-Modified", format.format(new Date(file.lastModified())))
   }
 
   private def sanitizeUri(uri: String): String = {
