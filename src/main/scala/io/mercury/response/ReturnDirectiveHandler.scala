@@ -5,9 +5,9 @@ import io.netty.handler.codec.http._
 
 class ReturnDirectiveHandler(code: Int, status: String) extends MercuryHttpResponder {
 
-  override def complete: (ChannelHandlerContext => Any) = {
+  override def complete(ctx: ChannelHandlerContext) = {
     val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(code, status))
-    (ctx) => ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE)
+    ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE)
   }
 
 }

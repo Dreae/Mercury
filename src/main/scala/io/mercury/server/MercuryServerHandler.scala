@@ -1,12 +1,12 @@
 package io.mercury.server
 
 import java.net.URLDecoder
-import java.util.Map.Entry
+import java.util.concurrent._
 import java.util.regex.Pattern
 
-import com.typesafe.config.{Config, ConfigObject, ConfigValue}
+import com.typesafe.config.ConfigObject
 import io.mercury.config.MercuryConfig
-import io.mercury.exceptions.UnknownRequestHandlerException
+import io.mercury.config.MercuryConfig.{LocationConfig, SiteConfig}
 import io.mercury.exceptions.http.HttpException
 import io.mercury.response.{ReturnDirectiveHandler, StaticContentResponse}
 import io.mercury.server.MercuryServerHandler.{CompleteResponse, StaticContent}
@@ -15,9 +15,12 @@ import io.netty.channel.{ChannelFutureListener, ChannelHandlerContext, SimpleCha
 import io.netty.handler.codec.http._
 
 import scala.annotation.tailrec
-import scala.util.Try
+import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success, Try}
 
 class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest]{
+
+  implicit val ec = MercuryServerHandler.ec
 
   override def channelReadComplete(ctx: ChannelHandlerContext) = {
     ctx.flush()
@@ -33,13 +36,14 @@ class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest
 
     val site = MercuryConfig().site(reqSite)
 
-    MercuryServerHandler.getRequestHandlerType(site, req) match {
-      case StaticContent(root) =>
-        new StaticContentResponse(root, site, req).complete(ctx)
-      case CompleteResponse(code, status) =>
-        new ReturnDirectiveHandler(code, status).complete(ctx)
-    }
-    complete(req, ctx)
+    process(
+      MercuryServerHandler.getRequestHandlerType(site, req) match {
+        case StaticContent(root) =>
+          new StaticContentResponse(root, site, req).complete
+        case CompleteResponse(code, status) =>
+          new ReturnDirectiveHandler(code, status).complete
+      }, req, ctx
+    )
   }
 
   override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) = {
@@ -54,10 +58,19 @@ class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest
     }
   }
 
-  private def complete(req: HttpRequest, ctx: ChannelHandlerContext) = {
-    if(!HttpHeaders.isKeepAlive(req) && ctx.channel.isActive) {
-      ctx.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE)
+  private def process(f: ChannelHandlerContext => Any, req: FullHttpRequest, ctx: ChannelHandlerContext) = {
+    val future = Future(f(ctx))
+    future.onComplete{
+      case Success(_) =>
+        complete(req, ctx)
+      case Failure(t) => throw t
     }
+  }
+
+  private def complete(req: HttpRequest, ctx: ChannelHandlerContext) = {
+    val future = ctx.writeAndFlush(Unpooled.EMPTY_BUFFER)
+    if(!HttpHeaders.isKeepAlive(req))
+      future.addListener(ChannelFutureListener.CLOSE)
   }
 
   def sendError(ctx: ChannelHandlerContext, code: Int, status: String) = {
@@ -75,62 +88,65 @@ class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest
 object MercuryServerHandler {
   val HTTP_DATE_FORMAT = "EEE, dd MMM yyyy HH:mm:ss zzz"
 
+  implicit val ec = new ExecutionContext {
+    val threadPool = new ThreadPoolExecutor(
+      MercuryConfig().worker_threads,
+      MercuryConfig().worker_threads * 4,
+      180l, TimeUnit.SECONDS, new SynchronousQueue[Runnable]()
+    )
+
+    override def reportFailure(t: Throwable): Unit = throw t
+
+    override def execute(runnable: Runnable): Unit = threadPool.submit(runnable)
+  }
+
   abstract class RequestHandlerType
   case class StaticContent(root: String) extends RequestHandlerType
   case class ProxyPass(host: String) extends RequestHandlerType
   case class CompleteResponse(code: Int, str: String) extends RequestHandlerType
 
   @tailrec
-  def getRequestHandlerType(site: Config, req: FullHttpRequest): RequestHandlerType = {
-    val locObj = site.getObject("locations")
-    val locations = locObj.entrySet().toArray.map(_.asInstanceOf[Entry[String, ConfigValue]])
-    val location = parseLocations(locations,  URLDecoder.decode(req.getUri, "utf-8"), req.getMethod.name.toLowerCase)
-    if(location != null) {
-      req.setUri(location._1)
-      getRequestHandlerType(
-        locObj.toConfig
-          .getObject(location._2).toConfig
-          .withFallback(site.withoutPath("locations").withFallback(MercuryConfig().defSite))
-        , req
-      )
+  def getRequestHandlerType(site: SiteConfig, req: FullHttpRequest): RequestHandlerType = {
+    val locations = site.locations.map(_.toArray)
+    val location = locations.map(parseLocations(_,  URLDecoder.decode(req.getUri, "utf-8"), req.getMethod.name.toLowerCase))
+    if(location.isDefined && location.get != null) {
+      req.setUri(location.get._1)
+      getRequestHandlerType(site.locations.get(location.get._2).site, req)
     } else {
-      if(site.hasPath("return")) {
-        val returnSplit = site.getString("return").split(" ", 2)
-        new CompleteResponse(returnSplit(0).toInt, returnSplit(1))
-      } else if(site.hasPath("proxy_pass")) {
-        new ProxyPass(site.getString("proxy_pass"))
-      } else if(site.hasPath("root")) {
-        new StaticContent(site.getString("root"))
+      if(site.returnDirective.isDefined) {
+        new CompleteResponse(site.returnDirective.get.code, site.returnDirective.get.status)
+      } else if(site.root.isDefined) {
+        new StaticContent(site.root.get)
       } else {
-        throw new UnknownRequestHandlerException("Unable to find handler for %s".format(site.getString("name")))
+        new StaticContent("html")
       }
     }
   }
 
   @tailrec
-  def parseLocations(locations: Array[Entry[String, ConfigValue]], uri: String, method: String): (String, String) = {
+  def parseLocations(locations: Array[(String, LocationConfig)], uri: String, method: String): (String, String) = {
     if(locations.isEmpty) {
       return null
     }
-    val locSplit = locations.head.getKey.split(" ")
+    val locSplit = locations.head._1.split(" ")
     if(locSplit(0) != "any" && method != locSplit(0)) {
       //TODO: Log error
       parseLocations(locations.tail, uri, method)
     } else {
-      locSplit(1) match {
-        case "~" =>
-          val pattern = locations.head.getValue.asInstanceOf[ConfigObject].get("__regex__").asInstanceOf[Pattern]
-          if(pattern.matcher(uri).matches()) {
-            (uri.substring(locSplit(1).length), locations.head.getKey)
-          } else {
-            parseLocations(locations.tail, uri, method)
-          }
-        case prefix =>
-          if(Try(uri.substring(0, prefix.length) == prefix).getOrElse(false)) {
-            (uri.substring(locSplit(1).length), locations.head.getKey)
-          } else {
-            parseLocations(locations.tail, uri, method)
-          }
+      if(locations.head._2.regex.isDefined) {
+        val pattern = locations.head._2.asInstanceOf[ConfigObject].get ("__regex__").asInstanceOf[Pattern]
+        if (pattern.matcher (uri).matches () ) {
+          (uri.substring(locSplit(1).length), locations.head._1)
+        } else {
+          parseLocations (locations.tail, uri, method)
+        }
+      }
+      else {
+        if (Try(uri.substring(0, locSplit(1).length) == locSplit(1)).getOrElse(false)) {
+          (uri.substring(locSplit(1).length), locations.head._1)
+        } else {
+          parseLocations(locations.tail, uri, method)
+        }
       }
     }
   }

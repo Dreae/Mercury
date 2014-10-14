@@ -4,5 +4,5 @@ import io.netty.channel.ChannelHandlerContext
 
 abstract class MercuryHttpResponder {
 
-  def complete: (ChannelHandlerContext => Any)
+  def complete(ctx: ChannelHandlerContext)
 }

@@ -1,30 +1,19 @@
 package io.mercury.config
 
 import java.io.File
-import collection.JavaConverters._
 import java.util.Map.Entry
 import java.util.regex.Pattern
 
 import com.typesafe.config._
-import io.mercury.exceptions.ConfigParsingException
+import io.mercury.config.MercuryConfig.SiteConfig
 import io.mercury.exceptions.http.NotFoundException
 
 class MercuryConfig(private val conf: Config) {
+  val defaultSite = new SiteConfig(ConfigFactory.load("site"))
+
   val server = conf.getObject("server").toConfig.withFallback(ConfigFactory.load("server"))
-  val defSite = ConfigFactory.load("site")
   val aggregateSize = this.parseAggregateSize(server.getString("max_file_upload"))
-  val sites = server.getList("sites").toArray.map {
-    case obj: ConfigObject =>
-      val siteConf = obj.toConfig.withFallback(defSite)
-      val locations = siteConf.getObject("locations").entrySet().toArray
-      val parsed = locations.toArray.map{
-        case entry: Entry[_,_] =>
-          parseLocRegex(entry.getKey.asInstanceOf[String], entry.getValue.asInstanceOf[ConfigValue])
-      }
-      siteConf.withValue("locations", ConfigValueFactory.fromMap(Map(parsed:_*).asJava))
-    case _ =>
-      throw new ConfigParsingException("Config is incorrectly formatted")
-  }
+  val sites = server.getList("sites").toArray.map{ case obj: ConfigObject => new SiteConfig(obj.toConfig) }
 
   val token = server.getString("server_tokens") match {
     case "product" =>
@@ -44,33 +33,13 @@ class MercuryConfig(private val conf: Config) {
   val worker_threads = conf.getInt("worker_threads")
 
   def site(reqSite: String) = {
-    val iSites = sites.filter(_.getString("name") == reqSite)
+    val iSites = sites.filter((site) => if(site.name.isDefined) site.name.get == reqSite else reqSite == "127.0.0.1")
     if(iSites.length == 0) {
       throw new NotFoundException
     } else if(iSites.length > 1) {
       //TODO: Log error
     }
     iSites(0)
-  }
-
-  private def parseLocRegex(location: String, locDef: ConfigValue): (String, AnyRef) = {
-    val locSplit = location.split(" ")
-    if(locSplit(1).contains("~")){
-      (
-        location,
-        configObject2Map(locDef.asInstanceOf[ConfigObject].withValue("__regex__", ConfigValueFactory.fromAnyRef(Pattern.compile(locSplit(2)))))
-      )
-    } else {
-      (location, configObject2Map(locDef.asInstanceOf[ConfigObject]))
-    }
-  }
-
-  private def configObject2Map(obj: ConfigObject) = {
-    val entrySet = obj.entrySet.toArray.map{
-      case entry: Entry[_,_] =>
-        (entry.getKey.asInstanceOf[String], entry.getValue.asInstanceOf[ConfigValue].unwrapped())
-    }
-    Map(entrySet:_*).asJava
   }
 
   implicit class IntToBytes(x: Int) {
@@ -92,6 +61,34 @@ class MercuryConfig(private val conf: Config) {
 }
 
 object MercuryConfig {
+  case class SiteConfig(
+                         locations: Option[Map[String, LocationConfig]],
+                         name: Option[String],
+                         indices: Option[List[String]],
+                         root: Option[String],
+                         returnDirective: Option[ReturnDirective]) {
+    def this(config: Config) = this(
+      getLocationMap(config),
+      getString(config, "name"),
+      getIndexList(config),
+      getString(config, "root"),
+      getReturnDirective(config)
+    )
+  }
+  case class LocationConfig(regex: Option[Pattern], site: SiteConfig) {
+    def this(name: String, config: Config) = this(
+      {
+        val locSplit =  name.split(" ")
+        if(locSplit(1).contains("~")) {
+          Some(Pattern.compile(locSplit(2)))
+        } else {
+          None
+        }
+      }, new SiteConfig(config)
+    )
+  }
+  case class ReturnDirective(code: Int, status: String)
+
   var config: MercuryConfig = null
 
   def apply() = config
@@ -101,5 +98,46 @@ object MercuryConfig {
     val conf = ConfigFactory.parseFile(new File("config/mercury.conf"))
     config = new MercuryConfig(conf.withFallback(default))
     config
+  }
+
+  def getInt(config: Config, path: String) = {
+    if(!config.hasPath(path)) None
+    else Some(config.getInt(path))
+  }
+
+  def getBoolean(config: Config, path: String) = {
+    if(!config.hasPath(path)) None
+    else Some(config.getBoolean(path))
+  }
+
+  def getString(config: Config, path: String)= {
+    if(!config.hasPath(path)) None
+    else Some(config.getString(path))
+  }
+
+  def getReturnDirective(config: Config) = {
+    if(!config.hasPath("return")) None
+    else {
+      val split = config.getString("return").split(" ", 2)
+      Some(ReturnDirective(split(0).toInt, split(1)))
+    }
+  }
+
+  def getLocationMap(config: Config) = {
+    if(!config.hasPath("locations")) None
+    else {
+      val locations = config.getObject("locations")
+      val locConfig = locations.toConfig
+      Some(Map(locations.keySet().toArray.map(_.asInstanceOf[String]).map{
+        (key) => (key, new LocationConfig(key, locConfig.getObject(key).toConfig))
+      }:_*))
+    }
+  }
+
+  def getIndexList(config: Config) = {
+    if(!config.hasPath("index")) None
+    else {
+      Some(config.getList("index").toArray.map{ case value: ConfigValue => value.unwrapped.asInstanceOf[String] }.toList)
+    }
   }
 }
