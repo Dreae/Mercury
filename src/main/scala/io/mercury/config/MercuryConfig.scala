@@ -7,13 +7,20 @@ import java.util.regex.Pattern
 import com.typesafe.config._
 import io.mercury.config.MercuryConfig.SiteConfig
 import io.mercury.exceptions.http.NotFoundException
+import io.mercury.logging.MercuryLogger
+
+import scala.util.matching.Regex
 
 class MercuryConfig(private val conf: Config) {
-  val defaultSite = new SiteConfig(ConfigFactory.load("site"))
-
   val server = conf.getObject("server").toConfig.withFallback(ConfigFactory.load("server"))
   val aggregateSize = this.parseAggregateSize(server.getString("max_file_upload"))
-  val sites = server.getList("sites").toArray.map{ case obj: ConfigObject => new SiteConfig(obj.toConfig) }
+
+  val access_log = MercuryConfig.getFile(conf, "access_log").getOrElse(new File("logs/access.log"))
+  val error_log = MercuryConfig.getFile(conf, "error_log").getOrElse(new File("logs/error.log"))
+
+  val defaultSite = new SiteConfig(ConfigFactory.load("site"), access_log, error_log)
+
+  val sites = server.getList("sites").toArray.map{ case obj: ConfigObject => new SiteConfig(obj.toConfig, access_log, error_log) }
 
   val token = server.getString("server_tokens") match {
     case "product" =>
@@ -61,30 +68,46 @@ class MercuryConfig(private val conf: Config) {
 }
 
 object MercuryConfig {
+  type SiteConfigType = (Option[Map[String, LocationConfig]],
+                          Option[String],
+                          Option[List[String]],
+                          Option[String],
+                          Option[ReturnDirective],
+                          MercuryLogger)
   case class SiteConfig(
                          locations: Option[Map[String, LocationConfig]],
                          name: Option[String],
                          indices: Option[List[String]],
                          root: Option[String],
-                         returnDirective: Option[ReturnDirective]) {
-    def this(config: Config) = this(
-      getLocationMap(config),
-      getString(config, "name"),
-      getIndexList(config),
-      getString(config, "root"),
-      getReturnDirective(config)
+                         returnDirective: Option[ReturnDirective],
+                         logger: MercuryLogger) {
+    def this(args: SiteConfigType) = this(args._1, args._2, args._3, args._4, args._5, args._6)
+
+    def this(config: Config, defAccessLog: File, defErrorLog: File) = this(
+      {
+        val access_log = getFile(config, "access_log", create = true).getOrElse(defAccessLog)
+        val error_log = getFile(config, "error_log", create = true).getOrElse(defErrorLog)
+        (
+          getLocationMap(config, access_log, error_log),
+          getString(config, "name"),
+          getIndexList(config),
+          getString(config, "root"),
+          getReturnDirective(config),
+          new MercuryLogger(access_log, error_log)
+        )
+      }
     )
   }
-  case class LocationConfig(regex: Option[Pattern], site: SiteConfig) {
-    def this(name: String, config: Config) = this(
+  case class LocationConfig(regex: Option[Regex], site: SiteConfig) {
+    def this(name: String, config: Config, defAccessLog: File, defErrorLog: File) = this(
       {
         val locSplit =  name.split(" ")
         if(locSplit(1).contains("~")) {
-          Some(Pattern.compile(locSplit(2)))
+          Some(locSplit(2).r)
         } else {
           None
         }
-      }, new SiteConfig(config)
+      }, new SiteConfig(config, defAccessLog, defErrorLog)
     )
   }
   case class ReturnDirective(code: Int, status: String)
@@ -123,13 +146,12 @@ object MercuryConfig {
     }
   }
 
-  def getLocationMap(config: Config) = {
+  def getLocationMap(config: Config, access_log: File, error_log: File) = {
     if(!config.hasPath("locations")) None
     else {
       val locations = config.getObject("locations")
-      val locConfig = locations.toConfig
       Some(Map(locations.keySet().toArray.map(_.asInstanceOf[String]).map{
-        (key) => (key, new LocationConfig(key, locConfig.getObject(key).toConfig))
+        (key) => (key, new LocationConfig(key, locations.get(key).asInstanceOf[ConfigObject].toConfig, access_log, error_log))
       }:_*))
     }
   }
@@ -138,6 +160,18 @@ object MercuryConfig {
     if(!config.hasPath("index")) None
     else {
       Some(config.getList("index").toArray.map{ case value: ConfigValue => value.unwrapped.asInstanceOf[String] }.toList)
+    }
+  }
+
+  def getFile(config: Config, path: String, create: Boolean = false): Option[File] = {
+    if(!config.hasPath(path)) None
+    else {
+      val file = new File(config.getString(path))
+      if(!file.exists() && create) {
+        file.mkdirs()
+        file.createNewFile()
+      }
+      Some(file)
     }
   }
 }

@@ -16,6 +16,7 @@ import io.netty.handler.codec.http._
 
 import scala.annotation.tailrec
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.matching.Regex
 import scala.util.{Failure, Success, Try}
 
 class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest]{
@@ -31,7 +32,6 @@ class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest
       sendError(ctx, 400, "Bad Request")
       return
     }
-
     val reqSite = req.headers.get("HOST").split(":")(0)
 
     val site = MercuryConfig().site(reqSite)
@@ -92,7 +92,14 @@ object MercuryServerHandler {
     val threadPool = new ThreadPoolExecutor(
       MercuryConfig().worker_threads,
       MercuryConfig().worker_threads * 4,
-      180l, TimeUnit.SECONDS, new SynchronousQueue[Runnable]()
+      180l, TimeUnit.SECONDS, new SynchronousQueue[Runnable](),
+      new ThreadFactory {
+        val group = new ThreadGroup(Thread.currentThread().getThreadGroup, "mercury-handler-pool")
+
+        override def newThread(r: Runnable): Thread = {
+          new Thread(group, r, "handler-thread-" + group.activeCount())
+        }
+      }
     )
 
     override def reportFailure(t: Throwable): Unit = throw t
@@ -134,11 +141,12 @@ object MercuryServerHandler {
       parseLocations(locations.tail, uri, method)
     } else {
       if(locations.head._2.regex.isDefined) {
-        val pattern = locations.head._2.asInstanceOf[ConfigObject].get ("__regex__").asInstanceOf[Pattern]
-        if (pattern.matcher (uri).matches () ) {
-          (uri.substring(locSplit(1).length), locations.head._1)
+        val pattern = locations.head._2.regex.get
+        val match_ = pattern.findFirstIn(uri)
+        if (match_.isDefined) {
+          (uri.substring(match_.get.length), locations.head._1)
         } else {
-          parseLocations (locations.tail, uri, method)
+          parseLocations(locations.tail, uri, method)
         }
       }
       else {
