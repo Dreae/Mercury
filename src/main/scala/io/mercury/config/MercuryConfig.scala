@@ -1,8 +1,8 @@
 package io.mercury.config
 
-import java.io.File
+import java.io.{File, RandomAccessFile}
+import java.nio.channels.FileChannel
 import java.util.Map.Entry
-import java.util.regex.Pattern
 
 import com.typesafe.config._
 import io.mercury.config.MercuryConfig.SiteConfig
@@ -15,8 +15,8 @@ class MercuryConfig(private val conf: Config) {
   val server = conf.getObject("server").toConfig.withFallback(ConfigFactory.load("server"))
   val aggregateSize = this.parseAggregateSize(server.getString("max_file_upload"))
 
-  val access_log = MercuryConfig.getFile(conf, "access_log").getOrElse(new File("logs/access.log"))
-  val error_log = MercuryConfig.getFile(conf, "error_log").getOrElse(new File("logs/error.log"))
+  val access_log = MercuryConfig.getFileChannel(conf, "access_log").getOrElse(new RandomAccessFile("logs/access.log", "rw").getChannel)
+  val error_log = MercuryConfig.getFileChannel(conf, "error_log").getOrElse(new RandomAccessFile("logs/error.log", "rw").getChannel)
 
   val defaultSite = new SiteConfig(ConfigFactory.load("site"), access_log, error_log)
 
@@ -83,10 +83,10 @@ object MercuryConfig {
                          logger: MercuryLogger) {
     def this(args: SiteConfigType) = this(args._1, args._2, args._3, args._4, args._5, args._6)
 
-    def this(config: Config, defAccessLog: File, defErrorLog: File) = this(
+    def this(config: Config, defAccessLog: FileChannel, defErrorLog: FileChannel) = this(
       {
-        val access_log = getFile(config, "access_log", create = true).getOrElse(defAccessLog)
-        val error_log = getFile(config, "error_log", create = true).getOrElse(defErrorLog)
+        val access_log = getFileChannel(config, "access_log", create = true).getOrElse(defAccessLog)
+        val error_log = getFileChannel(config, "error_log", create = true).getOrElse(defErrorLog)
         (
           getLocationMap(config, access_log, error_log),
           getString(config, "name"),
@@ -99,7 +99,7 @@ object MercuryConfig {
     )
   }
   case class LocationConfig(regex: Option[Regex], site: SiteConfig) {
-    def this(name: String, config: Config, defAccessLog: File, defErrorLog: File) = this(
+    def this(name: String, config: Config, defAccessLog: FileChannel, defErrorLog: FileChannel) = this(
       {
         val locSplit =  name.split(" ")
         if(locSplit(1).contains("~")) {
@@ -146,7 +146,7 @@ object MercuryConfig {
     }
   }
 
-  def getLocationMap(config: Config, access_log: File, error_log: File) = {
+  def getLocationMap(config: Config, access_log: FileChannel, error_log: FileChannel) = {
     if(!config.hasPath("locations")) None
     else {
       val locations = config.getObject("locations")
@@ -163,7 +163,7 @@ object MercuryConfig {
     }
   }
 
-  def getFile(config: Config, path: String, create: Boolean = false): Option[File] = {
+  def getFileChannel(config: Config, path: String, create: Boolean = false): Option[FileChannel] = {
     if(!config.hasPath(path)) None
     else {
       val file = new File(config.getString(path))
@@ -171,7 +171,7 @@ object MercuryConfig {
         file.mkdirs()
         file.createNewFile()
       }
-      Some(file)
+      Some(new RandomAccessFile(file.getAbsolutePath, "rw").getChannel)
     }
   }
 }

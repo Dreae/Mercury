@@ -1,6 +1,8 @@
 package io.mercury.logging
 
 import java.io.{BufferedOutputStream, File, FileOutputStream}
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.concurrent.{LinkedBlockingQueue, ThreadFactory, ThreadPoolExecutor, TimeUnit}
@@ -10,10 +12,10 @@ import io.netty.handler.codec.http.{HttpResponse, HttpRequest}
 
 import scala.concurrent.{ExecutionContext, Future}
 
-class MercuryLogger(access_logFile: File, error_logFile: File) {
+class MercuryLogger(access_logFile: FileChannel, error_logFile: FileChannel) {
   implicit val ec = MercuryLogger.ec
-  val access_log = new BufferedOutputStream(new FileOutputStream(access_logFile, true))
-  val error_log = new BufferedOutputStream(new FileOutputStream(error_logFile, true))
+  val access_log = access_logFile
+  val error_log = error_logFile
   val timeFormatter = new SimpleDateFormat("dd/MMM/yyyy:HH:mm:ss Z")
 
   def logAccess(remote: String, req: HttpRequest, response: HttpResponse) = {
@@ -27,7 +29,7 @@ class MercuryLogger(access_logFile: File, error_logFile: File) {
         response.headers.get("Content-Length"),
         req.headers().get("User-Agent")
       )
-      access_log.write(msg.getBytes("utf-8"))
+      access_log.write(ByteBuffer.wrap(msg.getBytes("utf-8")))
     }
   }
 }
