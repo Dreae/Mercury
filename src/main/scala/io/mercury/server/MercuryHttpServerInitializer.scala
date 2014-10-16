@@ -12,7 +12,6 @@ class MercuryHttpServerInitializer() extends ChannelInitializer[SocketChannel]{
     val p = ch.pipeline()
     p.addLast("codec", new MercuryHttpCodec())
     p.addLast("aggregator", new HttpObjectAggregator(MercuryConfig().aggregateSize))
-    p.addLast("logger", new MercuryLoggingEncoder())
     p.addLast("writer", new ChunkedWriteHandler())
     p.addLast("handler", new MercuryServerHandler())
   }

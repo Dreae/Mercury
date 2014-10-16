@@ -1,14 +1,12 @@
 package io.mercury.logging
 
-import java.io.{BufferedOutputStream, File, FileOutputStream}
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.concurrent.{LinkedBlockingQueue, ThreadFactory, ThreadPoolExecutor, TimeUnit}
 
-import io.mercury.config.MercuryConfig.SiteConfig
-import io.netty.handler.codec.http.{HttpResponse, HttpRequest}
+import io.netty.handler.codec.http.{HttpRequest, HttpResponse}
 
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -35,8 +33,6 @@ class MercuryLogger(access_logFile: FileChannel, error_logFile: FileChannel) {
 }
 
 object MercuryLogger {
-  case class MercuryLoggingMonad(req: HttpRequest, resp: HttpResponse, site: SiteConfig)
-
   implicit val ec = new ExecutionContext {
     val threadpool = new ThreadPoolExecutor(
       4, 4, 0l, TimeUnit.SECONDS, new LinkedBlockingQueue[Runnable](),

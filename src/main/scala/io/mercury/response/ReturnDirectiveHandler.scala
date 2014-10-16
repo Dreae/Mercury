@@ -1,13 +1,15 @@
 package io.mercury.response
 
-import io.netty.channel.{ChannelFutureListener, ChannelHandlerContext}
+import io.mercury.server.MercuryIO
 import io.netty.handler.codec.http._
 
-class ReturnDirectiveHandler(code: Int, status: String) extends MercuryHttpResponder {
+class ReturnDirectiveHandler(code: Int, status: String, req: HttpRequest) extends MercuryHttpResponder {
 
-  override def complete(ctx: ChannelHandlerContext) = {
+  override def complete() = {
+    req.headers.set("Connection", "close")
     val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(code, status))
-    ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE)
+    val IO = new MercuryIO()
+    IO >> response
   }
 
 }

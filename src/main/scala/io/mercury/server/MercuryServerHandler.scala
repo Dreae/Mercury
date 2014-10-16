@@ -2,9 +2,7 @@ package io.mercury.server
 
 import java.net.URLDecoder
 import java.util.concurrent._
-import java.util.regex.Pattern
 
-import com.typesafe.config.ConfigObject
 import io.mercury.config.MercuryConfig
 import io.mercury.config.MercuryConfig.{LocationConfig, SiteConfig}
 import io.mercury.exceptions.http.HttpException
@@ -16,7 +14,6 @@ import io.netty.handler.codec.http._
 
 import scala.annotation.tailrec
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.matching.Regex
 import scala.util.{Failure, Success, Try}
 
 class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest]{
@@ -39,10 +36,10 @@ class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest
     process(
       MercuryServerHandler.getRequestHandlerType(site, req) match {
         case StaticContent(root) =>
-          new StaticContentResponse(root, site, req).complete
+          new StaticContentResponse(root, site, req).complete()
         case CompleteResponse(code, status) =>
-          new ReturnDirectiveHandler(code, status).complete
-      }, req, ctx
+          new ReturnDirectiveHandler(code, status, req).complete()
+      }, req, ctx, site
     )
   }
 
@@ -58,10 +55,16 @@ class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest
     }
   }
 
-  private def process(f: ChannelHandlerContext => Any, req: FullHttpRequest, ctx: ChannelHandlerContext) = {
-    val future = Future(f(ctx))
+  private def process(f: => MercuryIO, req: FullHttpRequest, ctx: ChannelHandlerContext, site: SiteConfig) = {
+    val future = Future(f)
     future.onComplete{
-      case Success(_) =>
+      case Success(io) =>
+        io.msgList.map {
+          case msg: HttpResponse =>
+            site.logger.logAccess(ctx.channel().remoteAddress().toString, req, msg)
+            ctx.write(msg)
+          case msg => ctx.write(msg)
+        }
         complete(req, ctx)
       case Failure(t) => throw t
     }

@@ -1,8 +1,8 @@
 package io.mercury.response
 
-import io.netty.channel.ChannelHandlerContext
+import io.mercury.server.MercuryIO
 
 abstract class MercuryHttpResponder {
 
-  def complete(ctx: ChannelHandlerContext)
+  def complete(): MercuryIO
 }

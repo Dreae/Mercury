@@ -8,9 +8,8 @@ import java.util.{Calendar, Date, GregorianCalendar, Locale, TimeZone}
 import io.mercury.config.MercuryConfig
 import io.mercury.config.MercuryConfig.SiteConfig
 import io.mercury.exceptions.http.{MethodNotAllowedException, NotFoundException}
-import io.mercury.logging.MercuryLogger.MercuryLoggingMonad
+import io.mercury.server.MercuryIO
 import io.mercury.server.MercuryServerHandler.HTTP_DATE_FORMAT
-import io.netty.channel.{ChannelFutureListener, ChannelHandlerContext}
 import io.netty.handler.codec.http._
 import io.netty.handler.stream.ChunkedNioFile
 
@@ -18,7 +17,7 @@ class StaticContentResponse(root: String, site: SiteConfig, req: FullHttpRequest
   val format = new SimpleDateFormat(HTTP_DATE_FORMAT, Locale.US)
   format.setTimeZone(TimeZone.getTimeZone("GMT"))
 
-  override def complete(ctx: ChannelHandlerContext) = {
+  override def complete() = {
     if(req.getMethod.name != "GET")
       throw new MethodNotAllowedException
 
@@ -50,16 +49,16 @@ class StaticContentResponse(root: String, site: SiteConfig, req: FullHttpRequest
     val ifModifiedSince = req.headers().get("If-Modified-Since")
     if(ifModifiedSince != null && ifModifiedSince.nonEmpty && (format.parse(ifModifiedSince).getTime / 1000) == (file.lastModified() / 1000)) {
       val response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(304, "Not Modified"))
-      ctx.write(MercuryLoggingMonad(req, response, site))
+      val IO = new MercuryIO()
+      IO >> response
     } else {
       try {
         val response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, new HttpResponseStatus(200, "OK"))
+        val IO = new MercuryIO()
         response.headers.set("Content-Length", file.length)
         response.headers.set("Content-Type", guessMimeType(file.getCanonicalPath))
         setCacheHeaders(response, file)
-        ctx.write(MercuryLoggingMonad(req, response, site))
-        ctx.write(new HttpChunkedInput(new ChunkedNioFile(file, 2048)))
-        ctx.write(LastHttpContent.EMPTY_LAST_CONTENT)
+        IO >> response >> new HttpChunkedInput(new ChunkedNioFile(file, 2048)) >> LastHttpContent.EMPTY_LAST_CONTENT
       } catch {
         case _: FileNotFoundException => throw new NotFoundException
       }
