@@ -73,15 +73,17 @@ object MercuryConfig {
                           Option[List[String]],
                           Option[String],
                           Option[ReturnDirective],
-                          MercuryLogger)
+                          MercuryLogger,
+                          Option[Map[String, String]])
   case class SiteConfig(
                          locations: Option[Map[String, LocationConfig]],
                          name: Option[String],
                          indices: Option[List[String]],
                          root: Option[String],
                          returnDirective: Option[ReturnDirective],
-                         logger: MercuryLogger) {
-    def this(args: SiteConfigType) = this(args._1, args._2, args._3, args._4, args._5, args._6)
+                         logger: MercuryLogger,
+                         headers: Option[Map[String, String]]) {
+    def this(args: SiteConfigType) = this(args._1, args._2, args._3, args._4, args._5, args._6, args._7)
 
     def this(config: Config, defAccessLog: FileChannel, defErrorLog: FileChannel) = this(
       {
@@ -93,7 +95,8 @@ object MercuryConfig {
           getIndexList(config),
           getString(config, "root"),
           getReturnDirective(config),
-          new MercuryLogger(access_log, error_log)
+          new MercuryLogger(access_log, error_log),
+          getHeaderMap(config)
         )
       }
     )
@@ -152,6 +155,16 @@ object MercuryConfig {
       val locations = config.getObject("locations")
       Some(Map(locations.keySet().toArray.map(_.asInstanceOf[String]).map{
         (key) => (key, new LocationConfig(key, locations.get(key).asInstanceOf[ConfigObject].toConfig, access_log, error_log))
+      }:_*))
+    }
+  }
+
+  def getHeaderMap(config: Config) = {
+    if(!config.hasPath("headers")) None
+    else {
+      val headers = config.getObject("headers")
+      Some(Map(headers.keySet().toArray.map(_.asInstanceOf[String]).map {
+        (key) => (key, headers.get(key).unwrapped.asInstanceOf[String])
       }:_*))
     }
   }

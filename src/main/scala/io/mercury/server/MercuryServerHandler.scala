@@ -62,6 +62,7 @@ class MercuryServerHandler() extends SimpleChannelInboundHandler[FullHttpRequest
         io.msgList.map {
           case msg: HttpResponse =>
             site.logger.logAccess(ctx.channel().remoteAddress().toString, req, msg)
+            site.headers.map(_.map{ case (key, value) => msg.headers().set(key, value) })
             ctx.write(msg)
           case msg => ctx.write(msg)
         }
